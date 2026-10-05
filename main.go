@@ -19,6 +19,7 @@ func main() {
 
 	handler.HandleFunc("/hello", queue.PushTOQueueAndSendResponse)
 	handler.HandleFunc("/callback-check", callBackCheck)
+	handler.HandleFunc("/create-req", job.CreateSecret)
 
 	fmt.Println("Server running on port 8000")
 	err := http.ListenAndServe(":8000", handler)

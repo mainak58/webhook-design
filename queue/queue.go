@@ -2,7 +2,9 @@ package queue
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
+	"webhook/secret"
 )
 
 type ResponseData struct {
@@ -26,9 +28,20 @@ var WebhookQueue = make(chan WebHook)
 func PushTOQueueAndSendResponse(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
-	var req WebHookRequest
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "cannot read body", http.StatusBadRequest)
+		return
+	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	sig := r.Header.Get("X-Signature")
+	if !secret.VerifyHMACSHA256(string(body), sig) {
+		http.Error(w, "invalid signature", http.StatusUnauthorized)
+		return
+	}
+
+	var req WebHookRequest
+	if err := json.Unmarshal(body, &req); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
