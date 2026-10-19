@@ -23,7 +23,7 @@ type WebHookRequest struct {
 	CallbackURL string `json:"callbackUrl"`
 }
 
-var WebhookQueue = make(chan WebHook)
+var WebhookQueue = make(chan WebHook, 1000)
 
 func PushTOQueueAndSendResponse(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
@@ -46,9 +46,16 @@ func PushTOQueueAndSendResponse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	WebhookQueue <- WebHook{
+	select {
+	case WebhookQueue <- WebHook{
 		CallBackUrl: req.CallbackURL,
 		Message:     req.Message,
+	}:
+		w.WriteHeader(http.StatusAccepted)
+
+	default:
+		http.Error(w, "queue full please wait", http.StatusServiceUnavailable)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
