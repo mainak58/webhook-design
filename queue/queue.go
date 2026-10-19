@@ -4,18 +4,33 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"uuid"
 	"webhook/secret"
 )
 
 type ResponseData struct {
-	Status  string `json:"status"`
-	Message string `json:"message"`
+	Status  string    `json:"status"`
+	Message string    `json:"message"`
+	Id      uuid.UUID `json:"id"`
 }
 
 type WebHook struct {
-	CallBackUrl string
-	Message     string
+	id           uuid.UUID
+	CallBackUrl  string
+	Message      string
+	requestBody  string
+	responseBody string
+	status       Status
 }
+
+type Status int
+
+const (
+	Pending Status = iota
+	Active
+	Inactive
+	Deleted
+)
 
 type WebHookRequest struct {
 	RequestID   string `json:"request_id"`
@@ -46,10 +61,13 @@ func PushTOQueueAndSendResponse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	uId := uuid.New()
+
 	select {
 	case WebhookQueue <- WebHook{
 		CallBackUrl: req.CallbackURL,
 		Message:     req.Message,
+		id:          uId,
 	}:
 		w.WriteHeader(http.StatusAccepted)
 
@@ -63,6 +81,7 @@ func PushTOQueueAndSendResponse(w http.ResponseWriter, r *http.Request) {
 	d := ResponseData{
 		Status:  "success",
 		Message: "Hello, World!",
+		Id:      uId,
 	}
 
 	if err := json.NewEncoder(w).Encode(d); err != nil {
