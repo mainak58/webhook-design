@@ -1,21 +1,12 @@
 package job
 
 import (
-	"fmt"
 	"log"
+	"math/rand/v2"
 	"net/http"
 	"sync"
 	"time"
 	"webhook/queue"
-)
-
-var failedResponse = make(chan queue.WebHook, 1000)
-
-// 1 attempt in Scheduler + 4 in pickUpFailedJob = 5 total before permanentResponse.
-const (
-	firstAttempts = 1
-	retryAttempts = 4
-	retryDelay    = 1 * time.Minute
 )
 
 var (
@@ -28,74 +19,69 @@ var (
 	permanentResponse = []string{}
 )
 
-func deliver(client *http.Client, webhook queue.WebHook, attempts int) bool {
-	for i := 0; i < attempts; i++ {
-		resp, err := client.Get(webhook.CallBackUrl)
-		if err == nil {
-			resp.Body.Close()
-			if resp.StatusCode < 300 {
-				return true
+func recordDead(wh queue.WebHook) {
+
+	permanentMu.Lock()
+	permanentResponse = append(permanentResponse, wh.Message)
+	permanentMu.Unlock()
+
+}
+
+func recordDone(wh queue.WebHook) {
+
+	successMu.Lock()
+	successResponse = append(successResponse, wh.Message)
+	successMu.Unlock()
+
+}
+
+func deliverOnce(client *http.Client, wh queue.WebHook) bool {
+	resp, err := client.Get(wh.CallBackUrl)
+	if err != nil {
+		log.Printf("%s attempt %d: error making request: %v", wh.Message, wh.Attempts+1, err)
+		return false
+	}
+	resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		log.Printf("%s attempt %d: bad status %d", wh.Message, wh.Attempts+1, resp.StatusCode)
+		return false
+	}
+	return true
+}
+
+const maxAttempts = 5
+
+func handle(client *http.Client, wh queue.WebHook) {
+
+	if deliverOnce(client, wh) {
+		recordDone(wh)
+		return
+	}
+
+	wh.Attempts++
+
+	if wh.Attempts >= maxAttempts {
+		recordDead(wh)
+		return
+	}
+
+	delay := min(time.Minute<<(wh.Attempts-1), time.Hour)
+	delay += rand.N(delay / 10)
+	time.AfterFunc(delay, func() { queue.WebhookQueue <- wh })
+
+}
+
+func Scheduler(worker int) {
+
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	for range worker {
+		go func() {
+			for wh := range queue.WebhookQueue {
+				handle(client, wh)
 			}
-			log.Printf("%s attempt %d: bad status %d", webhook.Message, i+1, resp.StatusCode)
-		} else {
-			log.Printf("%s attempt %d: error making request: %v", webhook.Message, i+1, err)
-		}
-		if i < attempts-1 {
-			time.Sleep(10 * time.Second)
-		}
-	}
-	return false
-}
-
-func Scheduler() {
-	go pickUpFailedJob()
-
-	reqNumber := 0
-
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-	}
-
-	for {
-		webhook := <-queue.WebhookQueue
-		reqNumber++
-
-		fmt.Println("Received job", reqNumber, ":", webhook.Message)
-
-		if deliver(client, webhook, firstAttempts) {
-			successMu.Lock()
-			successResponse = append(successResponse, webhook.Message)
-			successMu.Unlock()
-		} else {
-			failedResponse <- webhook
-		}
-
-		fmt.Println("Finished job", reqNumber, ":", webhook.Message)
-	}
-}
-
-func pickUpFailedJob() {
-
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-	}
-
-	for {
-		webhook := <-failedResponse
-
-		time.Sleep(retryDelay)
-		fmt.Println("Retrying job:", webhook.Message)
-
-		if deliver(client, webhook, retryAttempts) {
-			successMu.Lock()
-			successResponse = append(successResponse, webhook.Message)
-			successMu.Unlock()
-		} else {
-			permanentMu.Lock()
-			permanentResponse = append(permanentResponse, webhook.Message)
-			permanentMu.Unlock()
-		}
-
-		fmt.Println("Finished retry:", webhook.Message)
+		}()
 	}
 }

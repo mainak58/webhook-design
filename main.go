@@ -13,7 +13,7 @@ func callBackCheck(http.ResponseWriter, *http.Request) {
 
 func main() {
 
-	go job.Scheduler()
+	job.Scheduler(10)
 
 	handler := http.NewServeMux()
 

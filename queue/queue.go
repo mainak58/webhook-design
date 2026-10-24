@@ -21,6 +21,7 @@ type WebHook struct {
 	requestBody  string
 	responseBody string
 	status       Status
+	Attempts     int
 }
 
 type Status int
@@ -63,6 +64,8 @@ func PushTOQueueAndSendResponse(w http.ResponseWriter, r *http.Request) {
 
 	uId := uuid.New()
 
+	w.Header().Set("Content-Type", "application/json")
+
 	select {
 	case WebhookQueue <- WebHook{
 		CallBackUrl: req.CallbackURL,
@@ -76,11 +79,9 @@ func PushTOQueueAndSendResponse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-
 	d := ResponseData{
-		Status:  "success",
-		Message: "Hello, World!",
+		Status:  "accepted",
+		Message: "webhook queued",
 		Id:      uId,
 	}
 
