@@ -4,6 +4,7 @@ import (
 	"log"
 	"math/rand/v2"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 	"webhook/queue"
@@ -35,6 +36,32 @@ func recordDone(wh queue.WebHook) {
 
 }
 
+const maxPerHost = 2
+
+var (
+	hostMu   sync.Mutex
+	hostBusy = map[string]int{}
+)
+
+func tryAcquire(host string) bool {
+	hostMu.Lock()
+	defer hostMu.Unlock()
+	if hostBusy[host] >= maxPerHost {
+		return false
+	}
+	hostBusy[host]++
+	return true
+}
+
+func release(host string) {
+	hostMu.Lock()
+	defer hostMu.Unlock()
+	hostBusy[host]--
+	if hostBusy[host] == 0 {
+		delete(hostBusy, host)
+	}
+}
+
 func deliverOnce(client *http.Client, wh queue.WebHook) bool {
 	resp, err := client.Get(wh.CallBackUrl)
 	if err != nil {
@@ -53,11 +80,23 @@ const maxAttempts = 5
 
 func handle(client *http.Client, wh queue.WebHook) {
 
-	if deliverOnce(client, wh) {
-		recordDone(wh)
+	u, err := url.Parse(wh.CallBackUrl)
+	if err != nil || u.Host == "" {
+		recordDead(wh)
 		return
 	}
 
+	if !tryAcquire(u.Host) {
+		time.AfterFunc(time.Second, func() { queue.WebhookQueue <- wh })
+		return
+	}
+	ok := deliverOnce(client, wh)
+	release(u.Host)
+
+	if ok {
+		recordDone(wh)
+		return
+	}
 	wh.Attempts++
 
 	if wh.Attempts >= maxAttempts {
